@@ -92,6 +92,10 @@ BatteryStatus_t Battery_GetStatus(void)
  */
 void Battery_Check(void)
 {
+    /* [调试] 暂时禁用电池检测，方便无电池测试 */
+    return;
+    
+    /*
     float voltage;
     
     // 读取电压
@@ -117,6 +121,7 @@ void Battery_Check(void)
         s_battery_status = BATTERY_OK;
         Battery_AlarmBuzzer(0);     // 停止报警
     }
+    */
 }
 
 /*==================================================================================================================

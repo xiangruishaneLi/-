@@ -1,21 +1,28 @@
 /*********************************************************************************************************************
  * @file        oled.c
  * @brief       飞檐走壁智能车 - I2C OLED 显示模块 (源文件)
- * @details     SSD1306 驱动，软件模拟 I2C
+ * @details     使用逐飞官方 soft_iic 驱动，更可靠
  * @author      智能车竞赛代码
- * @version     1.0
+ * @version     2.0
  * @date        2026-02-06
  * 
- * @note        使用软件 I2C 驱动，兼容性好，无需硬件资源
+ * @note        [修正] 使用逐飞官方软件 I2C 驱动替代自写代码
  ********************************************************************************************************************/
 
 #include "oled.h"
+#include "zf_driver_soft_iic.h"
+
+/*==================================================================================================================
+ *                                              软件 I2C 实例
+ *==================================================================================================================*/
+
+static soft_iic_info_struct oled_iic;   /* 逐飞软件 I2C 实例 */
 
 /*==================================================================================================================
  *                                              6×8 ASCII 字库 (简化版)
  *==================================================================================================================*/
 
-/* 6×8 点阵字库: ASCII 32~127, 每字符 6 字节 */
+/* 6×8 点阵字库: ASCII 32~126, 每字符 6 字节 */
 static const uint8 code OLED_FONT_6X8[][6] = {
     {0x00,0x00,0x00,0x00,0x00,0x00}, /*   32 */
     {0x00,0x00,0x5F,0x00,0x00,0x00}, /* ! 33 */
@@ -115,95 +122,19 @@ static const uint8 code OLED_FONT_6X8[][6] = {
 };
 
 /*==================================================================================================================
- *                                              软件 I2C 底层函数
- *==================================================================================================================*/
-
-/* I2C 延时 (约 5us, 适合 I2C 标准模式 100kHz) */
-static void i2c_delay(void)
-{
-    uint8 i;
-    for (i = 0; i < 10; i++);
-}
-
-/* SCL 引脚操作 */
-#define SCL_HIGH()  gpio_high(OLED_SCL)
-#define SCL_LOW()   gpio_low(OLED_SCL)
-#define SDA_HIGH()  gpio_high(OLED_SDA)
-#define SDA_LOW()   gpio_low(OLED_SDA)
-
-/* I2C 起始信号 */
-static void i2c_start(void)
-{
-    SDA_HIGH();
-    SCL_HIGH();
-    i2c_delay();
-    SDA_LOW();
-    i2c_delay();
-    SCL_LOW();
-}
-
-/* I2C 停止信号 */
-static void i2c_stop(void)
-{
-    SDA_LOW();
-    SCL_HIGH();
-    i2c_delay();
-    SDA_HIGH();
-    i2c_delay();
-}
-
-/* I2C 发送一个字节 */
-static void i2c_write_byte(uint8 dat)
-{
-    uint8 i;
-    
-    for (i = 0; i < 8; i++)
-    {
-        if (dat & 0x80)
-        {
-            SDA_HIGH();
-        }
-        else
-        {
-            SDA_LOW();
-        }
-        dat <<= 1;
-        
-        SCL_HIGH();
-        i2c_delay();
-        SCL_LOW();
-        i2c_delay();
-    }
-    
-    /* 等待 ACK (忽略) */
-    SDA_HIGH();
-    SCL_HIGH();
-    i2c_delay();
-    SCL_LOW();
-}
-
-/*==================================================================================================================
  *                                              OLED 底层命令/数据发送
  *==================================================================================================================*/
 
 /* 发送命令 */
 static void oled_write_cmd(uint8 cmd)
 {
-    i2c_start();
-    i2c_write_byte(OLED_I2C_ADDR);  /* 设备地址 + 写 */
-    i2c_write_byte(0x00);            /* Co=0, D/C=0 (命令) */
-    i2c_write_byte(cmd);
-    i2c_stop();
+    soft_iic_write_8bit_register(&oled_iic, 0x00, cmd);  /* 0x00 = 命令模式 */
 }
 
 /* 发送数据 */
 static void oled_write_data(uint8 dat)
 {
-    i2c_start();
-    i2c_write_byte(OLED_I2C_ADDR);  /* 设备地址 + 写 */
-    i2c_write_byte(0x40);            /* Co=0, D/C=1 (数据) */
-    i2c_write_byte(dat);
-    i2c_stop();
+    soft_iic_write_8bit_register(&oled_iic, 0x40, dat);  /* 0x40 = 数据模式 */
 }
 
 /* 设置显示位置 */
@@ -220,44 +151,54 @@ static void oled_set_pos(uint8 x, uint8 page)
 
 /**
  * @brief   初始化 OLED
+ * @note    [修正] 使用逐飞官方软件 I2C 驱动
  */
 void oled_init(void)
 {
-    /* 初始化 I2C 引脚为推挽输出 */
-    gpio_init(OLED_SCL, GPO, 1, GPO_PUSH_PULL);
-    gpio_init(OLED_SDA, GPO, 1, GPO_PUSH_PULL);
+    /* [修正] 使用逐飞官方 soft_iic 初始化 */
+    /* 参数: 结构体指针, 7位地址(0x3C), 延时(100), SCL引脚, SDA引脚 */
+    soft_iic_init(&oled_iic, 0x3C, 100, OLED_SCL, OLED_SDA);
     
     /* 延时等待 OLED 上电稳定 */
-    system_delay_ms(100);
+    system_delay_ms(200);
     
     /* SSD1306 初始化序列 */
     oled_write_cmd(0xAE);   /* 关闭显示 */
-    oled_write_cmd(0x20);   /* 设置内存寻址模式 */
-    oled_write_cmd(0x10);   /* 页寻址模式 */
-    oled_write_cmd(0xB0);   /* 设置页起始地址 */
-    oled_write_cmd(0xC8);   /* COM 扫描方向: 从 COM[N-1] 到 COM0 */
-    oled_write_cmd(0x00);   /* 设置列低地址 */
-    oled_write_cmd(0x10);   /* 设置列高地址 */
-    oled_write_cmd(0x40);   /* 设置显示起始行 */
-    oled_write_cmd(0x81);   /* 设置对比度 */
-    oled_write_cmd(0xFF);   /* 对比度值 (0x00~0xFF) */
-    oled_write_cmd(0xA1);   /* 段重映射: 列地址 127 映射到 SEG0 */
-    oled_write_cmd(0xA6);   /* 正常显示 (非反显) */
+    
+    oled_write_cmd(0xD5);   /* 设置显示时钟分频比/振荡器频率 */
+    oled_write_cmd(0x80);
+    
     oled_write_cmd(0xA8);   /* 设置多路复用率 */
     oled_write_cmd(0x3F);   /* 1/64 duty */
-    oled_write_cmd(0xA4);   /* 输出跟随 RAM 内容 */
+    
     oled_write_cmd(0xD3);   /* 设置显示偏移 */
     oled_write_cmd(0x00);   /* 无偏移 */
-    oled_write_cmd(0xD5);   /* 设置显示时钟分频 */
-    oled_write_cmd(0xF0);   /* 分频值 */
-    oled_write_cmd(0xD9);   /* 设置预充电周期 */
-    oled_write_cmd(0x22);
+    
+    oled_write_cmd(0x40);   /* 设置显示起始行 */
+    
+    oled_write_cmd(0xA1);   /* 设置左右方向 */
+    
+    oled_write_cmd(0xC8);   /* 设置上下方向 */
+    
     oled_write_cmd(0xDA);   /* 设置 COM 引脚硬件配置 */
     oled_write_cmd(0x12);
-    oled_write_cmd(0xDB);   /* 设置 VCOMH 电压 */
-    oled_write_cmd(0x20);
-    oled_write_cmd(0x8D);   /* 使能电荷泵 */
-    oled_write_cmd(0x14);
+    
+    oled_write_cmd(0x81);   /* 设置对比度 */
+    oled_write_cmd(0xCF);
+    
+    oled_write_cmd(0xD9);   /* 设置预充电周期 */
+    oled_write_cmd(0xF1);
+    
+    oled_write_cmd(0xDB);   /* 设置 VCOMH 取消选择级别 */
+    oled_write_cmd(0x30);
+    
+    oled_write_cmd(0xA4);   /* 设置整个显示打开/关闭 */
+    
+    oled_write_cmd(0xA6);   /* 设置正常/倒转显示 */
+    
+    oled_write_cmd(0x8D);   /* 设置充电泵 */
+    oled_write_cmd(0x14);   /* 开启充电泵 */
+    
     oled_write_cmd(0xAF);   /* 开启显示 */
     
     /* 清屏 */
@@ -279,6 +220,14 @@ void oled_clear(void)
             oled_write_data(0x00);
         }
     }
+}
+
+/**
+ * @brief   刷新显示 (占位函数)
+ */
+void oled_refresh(void)
+{
+    /* 本驱动直接写入显存，无需刷新 */
 }
 
 /**
