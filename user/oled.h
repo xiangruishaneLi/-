@@ -24,7 +24,7 @@
 
 #define OLED_WIDTH              128             /* 屏幕宽度 (像素) */
 #define OLED_HEIGHT             64              /* 屏幕高度 (像素) */
-#define OLED_I2C_ADDR           0x78            /* SSD1306 I2C 地址 (7bit=0x3C, 写地址=0x78) */
+#define OLED_I2C_ADDR           0x78            /* SSD1306 I2C 地址 (先试 0x78, 不行换 0x7A) */
 
 /* I2C 引脚定义 (使用 car_config.h 中的定义) */
 #define OLED_SCL                OLED_I2C_SCL_PIN    /* P2.5 */

@@ -9,7 +9,14 @@
 
 #include "system.h"
 #include "key.h"                    /* 按键模块 - 用于判断运行状态 */
-#include "zf_device_imu660ra.h"    /* IMU 驱动 */
+#include "debug_display.h"          /* 调试显示模块 - OLED + 蓝牙 */
+
+/* IMU 驱动 - 根据 car_config.h 中 IMU_SELECT 自动选择 */
+#if (IMU_SELECT == 1)
+    #include "zf_device_imu660ra.h"     /* IMU660RA (逐飞) */
+#elif (IMU_SELECT == 2)
+    #include "lsm6dsr.h"               /* LSM6DSR (ST) */
+#endif
 
 /*==================================================================================================================
  *                                              全局变量
@@ -66,16 +73,34 @@ void System_Init(void)
     // 按键与拨码开关 (启动控制)
     key_init();
     
-    // IMU 六轴传感器
-    // 注意: 需要确保 zf_device_imu660ra.h 中的引脚定义正确
-    // 如果初始化失败会返回非0值
-    if (imu660ra_init())
+    // 调试显示模块 (OLED + 蓝牙调试)
+    DebugDisplay_Init();
+    
+    // IMU 六轴传感器初始化
     {
-        // IMU 初始化失败, 可以添加错误处理
-        // 这里简单处理: 蜂鸣器响一下
-        BUZZER_ON();
-        system_delay_ms(200);
-        BUZZER_OFF();
+        uint8 imu_result;
+        
+#if (IMU_SELECT == 1)
+        oled_show_string(0, 3, "IMU: 660RA");
+        imu_result = imu660ra_init();
+#elif (IMU_SELECT == 2)
+        oled_show_string(0, 3, "IMU: LSM6DSR");
+        imu_result = lsm6dsr_init();
+#endif
+        
+        if (imu_result)
+        {
+            oled_show_string(0, 4, "IMU FAIL!");
+            BUZZER_ON();
+            system_delay_ms(1000);
+            BUZZER_OFF();
+        }
+        else
+        {
+            oled_show_string(0, 4, "IMU OK!");
+            system_delay_ms(500);
+        }
+        oled_clear();
     }
     
     /*-------------------------------------------------
@@ -212,20 +237,23 @@ void System_Control(void)
     inductor_error = Inductor_GetError();
     
     // 读取 IMU (加速度和陀螺仪)
+#if (IMU_SELECT == 1)
     imu660ra_get_gyro();
     imu660ra_get_acc();
-    
-    // 简化姿态解算: 使用加速度计计算俯仰角
-    // pitch ≈ atan2(acc_x, acc_z) * 180 / PI
-    // 这里使用近似公式避免浮点运算: pitch ≈ acc_x / acc_z * 57.3
-    // 更精确的做法是使用互补滤波或卡尔曼滤波结合陀螺仪数据
     if (imu660ra_acc_z != 0)
     {
         g_system.pitch_angle = (int16)((int32)imu660ra_acc_x * 57 / imu660ra_acc_z);
     }
-    
-    // 偏航角速度 (用于辅助转向)
-    g_system.yaw_rate = imu660ra_gyro_z / 16;   // 简化缩放
+    g_system.yaw_rate = imu660ra_gyro_z / 16;
+#elif (IMU_SELECT == 2)
+    lsm6dsr_get_gyro();
+    lsm6dsr_get_acc();
+    if (lsm6dsr_acc_z != 0)
+    {
+        g_system.pitch_angle = (int16)((int32)lsm6dsr_acc_x * 57 / lsm6dsr_acc_z);
+    }
+    g_system.yaw_rate = lsm6dsr_gyro_z / 16;
+#endif
     
     /*-------------------------------------------------
      * Step 2: 方向环 PID (基于电感偏差)
@@ -326,20 +354,28 @@ void System_TaskLoop(void)
         // 读取传感器 (不论车是否运行)
         Encoder_Update();
         Inductor_Update();
+#if (IMU_SELECT == 1)
         imu660ra_get_gyro();
         imu660ra_get_acc();
-        
-        // 更新系统变量
         if (imu660ra_acc_z != 0)
         {
             g_system.pitch_angle = (int16)((int32)imu660ra_acc_x * 57 / imu660ra_acc_z);
         }
         g_system.yaw_rate = imu660ra_gyro_z / 16;
+#elif (IMU_SELECT == 2)
+        lsm6dsr_get_gyro();
+        lsm6dsr_get_acc();
+        if (lsm6dsr_acc_z != 0)
+        {
+            g_system.pitch_angle = (int16)((int32)lsm6dsr_acc_x * 57 / lsm6dsr_acc_z);
+        }
+        g_system.yaw_rate = lsm6dsr_gyro_z / 16;
+#endif
     }
     
-    // OLED 显示更新 (可选)
-    // 显示电压、速度、偏差等信息
-    // oled_show_string(...);
+    // OLED 调试显示更新
+    DebugDisplay_Update();
+    DebugDisplay_OledRefresh();
 }
 
 /*==================================================================================================================
